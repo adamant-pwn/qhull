@@ -1,3 +1,4 @@
+# Modified by Oleksandr Kulkov with AI assistance, 2026-10-31: build/test robust 2-d predicates.
 # Unix Makefile for reentrant libqhull, qhull, and rbox (default gcc/g++)
 #
 #   make help
@@ -479,7 +480,7 @@ LIBQHULL_HDRS = $(L)/user.h $(L)/libqhull.h $(L)/qhull_a.h $(L)/geom.h \
 
 LIBQHULLR_HDRS = $(LR)/user_r.h $(LR)/libqhull_r.h $(LR)/qhull_ra.h $(LR)/geom_r.h \
 	$(LR)/io_r.h $(LR)/mem_r.h $(LR)/merge_r.h $(LR)/poly_r.h $(LR)/random_r.h \
-	$(LR)/qset_r.h $(LR)/stat_r.h
+	$(LR)/qset_r.h $(LR)/stat_r.h $(LR)/exact_sum.h $(LR)/robust2d_r.h
 
 # LIBQHULLS_OBJS and LIBQHULLSR_OBJS ordered by frequency of execution with
 # small files at end.  Better locality.

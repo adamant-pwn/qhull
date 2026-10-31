@@ -1,3 +1,6 @@
+/* Modified by Oleksandr Kulkov with AI assistance, 2026-10-31:
+   preserve near-collinear vertices in reentrant 2-d convex hulls.
+   Qhull license: COPYING.txt; original source: https://www.qhull.org/ */
 /*<html><pre>  -<a                             href="qh-merge_r.htm#TOC"
   >-------------------------------</a><a name="TOP">-</a>
 
@@ -26,6 +29,7 @@
 */
 
 #include "qhull_ra.h"
+#include "robust2d_r.h"
 
 #ifndef qh_NOmerge
 
@@ -2529,6 +2533,10 @@ int qh_merge_degenredundant(qhT *qh) {
       nummerges++;
     }else {  /* mergetype == MRGdegen or MRGmirror, other merges may have fixed */
       if (!(size= qh_setsize(qh, facet1->neighbors))) {
+        if(qh_robust2d(qh)) {
+          qh_fprintf(qh,qh->ferr,9007,"ROBUST_RETRY isolated_facet\n");
+          qh_errexit(qh,qh_ERRprec,NULL,NULL);
+        }
         zinc_(Zdelfacetdup);
         trace2((qh, qh->ferr, 2026, "qh_merge_degenredundant: facet f%d has no neighbors.  Deleted\n", facet1->id));
         qh_willdelete(qh, facet1, NULL);
@@ -2813,6 +2821,10 @@ void qh_mergecycle(qhT *qh, facetT *samecycle, facetT *newfacet) {
   facetT *same;
 #endif
 
+  if(qh_robust2d(qh)) {
+    qh_fprintf(qh,qh->ferr,9006,"ROBUST_RETRY merge_cycle\n");
+    qh_errexit(qh,qh_ERRprec,NULL,NULL);
+  }
   zzinc_(Ztotmerge);
   if (qh->REPORTfreq2 && qh->POSTmerging) {
     if (zzval_(Ztotmerge) > qh->mergereport + qh->REPORTfreq2)
@@ -3366,6 +3378,10 @@ void qh_mergefacet(qhT *qh, facetT *facet1, facetT *facet2, mergeType mergetype,
   int tracerestore=0, nummerge;
   const char *mergename;
 
+  if(qh_robust2d(qh) && !qh_local_merge_ok(qh,facet1,facet2)) {
+    qh_fprintf(qh,qh->ferr,9004,"ROBUST_RETRY merge\n");
+    qh_errexit(qh,qh_ERRprec,NULL,NULL);
+  }
   if(mergetype > 0 && mergetype < sizeof(mergetypes)/sizeof(char *))
     mergename= mergetypes[mergetype];
   else
@@ -4893,20 +4909,43 @@ boolT qh_test_appendmerge(qhT *qh, facetT *facet, facetT *neighbor, boolT simpli
 */
 boolT qh_test_centrum_merge(qhT *qh, facetT *facet, facetT *neighbor, realT angle, boolT okangle) {
   coordT dist, dist2, mergedist;
+  pointT *testpoint;
+  vertexT *vertex;
   boolT isconcave= False, iscoplanar= False;
 
-  if (!facet->center)
-    facet->center= qh_getcentrum(qh, facet);
+  if (qh_robust2d(qh)) {
+    /* Adjacent edges share a vertex.  The other vertex and the exact
+       midpoint have the same side; avoid rounding a thin edge's centre.
+       Robust 2-d uses a zero centrum radius, so no division is needed. */
+    vertex= SETfirstt_(facet->vertices, vertexT);
+    if (vertex == SETelemt_(neighbor->vertices, 0, vertexT)
+    || vertex == SETelemt_(neighbor->vertices, 1, vertexT))
+      vertex= SETelemt_(facet->vertices, 1, vertexT);
+    testpoint= vertex->point;
+  }else {
+    if (!facet->center)
+      facet->center= qh_getcentrum(qh, facet);
+    testpoint= facet->center;
+  }
   zzinc_(Zcentrumtests);
-  qh_distplane(qh, facet->center, neighbor, &dist);
+  qh_distplane(qh, testpoint, neighbor, &dist);
   if (dist > qh->centrum_radius)
     isconcave= True;
   else if (dist >= -qh->centrum_radius)
     iscoplanar= True;
-  if (!neighbor->center)
-    neighbor->center= qh_getcentrum(qh, neighbor);
+  if (qh_robust2d(qh)) {
+    vertex= SETfirstt_(neighbor->vertices, vertexT);
+    if (vertex == SETelemt_(facet->vertices, 0, vertexT)
+    || vertex == SETelemt_(facet->vertices, 1, vertexT))
+      vertex= SETelemt_(neighbor->vertices, 1, vertexT);
+    testpoint= vertex->point;
+  }else {
+    if (!neighbor->center)
+      neighbor->center= qh_getcentrum(qh, neighbor);
+    testpoint= neighbor->center;
+  }
   zzinc_(Zcentrumtests);
-  qh_distplane(qh, neighbor->center, facet, &dist2);
+  qh_distplane(qh, testpoint, facet, &dist2);
   if (dist2 > qh->centrum_radius)
     isconcave= True;
   else if (!iscoplanar && dist2 >= -qh->centrum_radius)

@@ -1,3 +1,6 @@
+/* Modified by Oleksandr Kulkov with AI assistance, 2026-10-31:
+   preserve near-collinear vertices in reentrant 2-d convex hulls.
+   Qhull license: COPYING.txt; original source: https://www.qhull.org/ */
 /*<html><pre>  -<a                             href="qh-qhull_r.htm"
   >-------------------------------</a><a name="TOP">-</a>
 
@@ -16,6 +19,7 @@
 */
 
 #include "qhull_ra.h"
+#include "robust2d_r.h"
 
 /*============= functions in alphabetic order after qhull() =======*/
 
@@ -1051,6 +1055,11 @@ pointT *qh_nextfurthest(qhT *qh, facetT **visible) {
       partition point into facets' outside sets and coplanar sets
 */
 void qh_partitionall(qhT *qh, setT *vertices, pointT *points, int numpoints){
+  /* Original input coordinates were bounded by qh_maxmin before partitioning.
+     This loop does not construct points or change the cached error bound. */
+  boolT robustbatch= qh_robust2d(qh) && !qh->RANDOMdist && qh->IStracing < 4
+      && !qh->TRACElevel && points == qh->first_point && numpoints <= qh->num_points;
+  realT batcherror= robustbatch ? qh_robust2d_state(qh)->error : 0;
   setT *pointset;
   vertexT *vertex, **vertexp;
   pointT *point, **pointp, *bestpoint;
@@ -1089,7 +1098,14 @@ void qh_partitionall(qhT *qh, setT *vertices, pointT *points, int numpoints){
       FOREACHpoint_i_(qh, pointset) {
         if (point) {
           zzinc_(Zpartitionall);
-          qh_distplane(qh, point, facet, &dist);
+          if (robustbatch) {
+            dist=facet->offset+point[0]*facet->normal[0]+point[1]*facet->normal[1];
+            /* Certify before assigning or discarding a point. */
+            if (!(fabs(dist)>batcherror))
+              qh_distplane2d(qh, point, facet, &dist);
+            zzinc_(Zdistplane);
+          }else
+            qh_distplane(qh, point, facet, &dist);
           if (dist < distoutside)
             SETelem_(pointset, point_end++)= point;
           else {

@@ -1,3 +1,6 @@
+/* Modified by Oleksandr Kulkov with AI assistance, 2026-10-31:
+   preserve near-collinear vertices in reentrant 2-d convex hulls.
+   Qhull license: COPYING.txt; original source: https://www.qhull.org/ */
 /*<html><pre>  -<a                             href="qh-qhull_r.htm"
   >-------------------------------</a><a name="TOP">-</a>
 
@@ -822,7 +825,8 @@ struct qhT {
   qh global buffers
     defines buffers for maxtrix operations, input, and error messages
 */
-  coordT *gm_matrix;      /* (dim+1)Xdim matrix for geom_r.c */
+  coordT *gm_matrix;      /* library-owned by qh_initqhull_buffers/qh_freebuffers;
+                             (dim+1)Xdim scratch prefix, then private 2-d state */
   coordT **gm_row;        /* array of gm_matrix rows */
   char* line;             /* malloc'd input line of maxline+1 chars */
   int maxline;

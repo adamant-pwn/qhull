@@ -1,3 +1,6 @@
+/* Modified by Oleksandr Kulkov with AI assistance, 2026-10-31:
+   preserve near-collinear vertices in reentrant 2-d convex hulls.
+   Qhull license: COPYING.txt; original source: https://www.qhull.org/ */
 /*<html><pre>  -<a                             href="qh-geom_r.htm"
   >-------------------------------</a><a name="TOP">-</a>
 
@@ -15,8 +18,70 @@
 */
 
 #include "qhull_ra.h"
+#include "robust2d_r.h"
+#include "exact_sum.h"
 
 /*================== functions in alphabetic order ============*/
+
+/* Robust 2-d distance fallback. Keep its accumulator off the hot path. */
+void qh_distplane2d(qhT *qh, pointT *point, facetT *facet, realT *dist) {
+  coordT *normal=facet->normal;
+    /* Use a filtered endpoint determinant. Only uncertain signs need limbs. */
+    {
+      vertexT *va=(vertexT *)SETelem_(facet->vertices, 0);
+      vertexT *vb=(vertexT *)SETelem_(facet->vertices, 1);
+      const coordT *a=va->point, *b=vb->point;
+      double dx=b[0]-a[0], dy=b[1]-a[1];
+      double det=0, magnitude=0;
+      int count=point == qh->interior_point ? 3 : 1;
+      int i, sign;
+      if (point != qh->interior_point) {
+        if ((point[0]==a[0] && point[1]==a[1]) ||
+            (point[0]==b[0] && point[1]==b[1])) {
+          *dist=0;
+          return;
+        }
+      }
+      for (i=0; i<count; ++i) {
+        const coordT *c=count == 3 ? qh_robust2d_state(qh)->initial_vertices+2*i : point;
+        double left=(a[0]-c[0])*(b[1]-c[1]);
+        double right=(a[1]-c[1])*(b[0]-c[0]);
+        det+=left-right;
+        magnitude+=fabs(left)+fabs(right);
+      }
+      if (hull_isfinite(dx) && hull_isfinite(dy) && hull_isfinite(magnitude) &&
+          magnitude>1.1830521861667747e-271 &&
+          fabs(det)>16*DBL_EPSILON*magnitude) {
+        double ratio=fabs(dy)>fabs(dx) ? -normal[0]/dy : normal[1]/dx;
+        if (hull_isfinite(ratio)) {
+          *dist=(det/count)*ratio;
+          if (*dist == 0)
+            *dist=hull_copysign(HULL_TRUE_MIN, (facet->toporient ? -det : det));
+          return;
+        }
+      }
+      {
+        int exponent;
+        hull_sum sum={{0},{0},0,0};
+        exponent=hull_edge(a,b,&dx,&dy);
+        for (i=0; i<count; ++i) {
+          const coordT *c=count == 3 ? qh_robust2d_state(qh)->initial_vertices+2*i : point;
+          hull_product(&sum,a[0],b[1],0);
+          hull_product(&sum,b[0],c[1],0);
+          hull_product(&sum,c[0],a[1],0);
+          hull_product(&sum,a[1],b[0],1);
+          hull_product(&sum,b[1],c[0],1);
+          hull_product(&sum,c[1],a[0],1);
+        }
+        sign=hull_sum_sign(&sum);
+        *dist=hull_sum_divide(&sum,-exponent,count*sqrt(dx*dx+dy*dy));
+        if (*dist == 0 && sign)
+          *dist=sign*HULL_TRUE_MIN;
+        if (facet->toporient)
+          *dist= -*dist;
+      }
+    }
+}
 
 /*-<a                             href="qh-geom_r.htm#TOC"
   >-------------------------------</a><a name="copypoints">-</a>
@@ -220,9 +285,20 @@ void qh_detmaxoutside(qhT *qh) {
 */
 void qh_detroundoff(qhT *qh) {
 
+  if (qh->hull_dim == 2) {
+    qh_robust2d_state(qh)->enabled= HULL_BINARY64 && sizeof(realT) == sizeof(double) && qh->MAXabs_coord <= DBL_MAX && qh->hull_dim == 2 && !qh->DELAUNAY && !qh->HALFspace
+        && !qh->RERUN && !qh->RANDOMdist && qh->JOGGLEmax > REALmax/2
+        && !qh->SETroundoff && !qh->APPROXhull && !qh->NOpremerge
+        && !qh->POSTmerge && qh->premerge_centrum == 0
+        && qh->premerge_cos > REALmax/2
+        && qh->MINvisible > REALmax/2 && qh->MAXcoplanar > REALmax/2;
+    qh_robust2d_state(qh)->maxcoord=qh->MAXabs_coord;
+    qh_robust2d_state(qh)->error=(qh_robust2d_state(qh)->maxcoord <= DBL_MAX/16 ?
+        128*DBL_EPSILON*qh_robust2d_state(qh)->maxcoord + 32*DBL_MIN : HUGE_VAL);
+  }
   qh_option(qh, "_max-width", NULL, &qh->MAXwidth);
   if (!qh->SETroundoff) {
-    qh->DISTround= qh_distround(qh, qh->hull_dim, qh->MAXabs_coord, qh->MAXsumcoord);
+    qh->DISTround= qh_robust2d(qh) ? 0 : qh_distround(qh, qh->hull_dim, qh->MAXabs_coord, qh->MAXsumcoord);
     qh_option(qh, "Error-roundoff", NULL, &qh->DISTround);
   }
   qh->MINdenom= qh->MINdenom_1 * qh->MAXabs_coord;
@@ -301,6 +377,10 @@ void qh_detroundoff(qhT *qh) {
       maximize_(qh->MINoutside, (1- qh->premerge_cos) * qh->MAXabs_coord);
     qh_option(qh, "Width-outside", NULL, &qh->MINoutside);
   }
+  /* Existing >= outside tests require the least positive representable value
+     to distinguish an exactly coplanar point from a strictly exterior point. */
+  if (qh_robust2d(qh))
+    qh->MINoutside= HULL_TRUE_MIN;
   qh->WIDEfacet= qh->MINoutside;
   maximize_(qh->WIDEfacet, qh_WIDEcoplanar * qh->MAXcoplanar);
   maximize_(qh->WIDEfacet, qh_WIDEcoplanar * qh->MINvisible);
@@ -355,7 +435,26 @@ realT qh_detsimplex(qhT *qh, pointT *apex, setT *points, int dim, boolT *nearzer
                i, dim);
     qh_errexit(qh, qh_ERRqhull, NULL, NULL);
   }
-  det= qh_determinant(qh, rows, dim, nearzero);
+  if (qh_robust2d(qh) && dim == 2) {
+    const coordT *a=(pointT *)SETelem_(points,0);
+    const coordT *b=(pointT *)SETelem_(points,1);
+    hull_sum sum={{0},{0},0,0};
+    int sign;
+    hull_product(&sum,a[0],b[1],0);
+    hull_product(&sum,b[0],apex[1],0);
+    hull_product(&sum,apex[0],a[1],0);
+    hull_product(&sum,a[1],b[0],1);
+    hull_product(&sum,b[1],apex[0],1);
+    hull_product(&sum,apex[1],a[0],1);
+    sign=hull_sum_sign(&sum);
+    det=hull_sum_value(&sum,0);
+    if (!hull_isfinite(det))
+      det=sign*DBL_MAX;
+    else if (det == 0 && sign)
+      det=sign*HULL_TRUE_MIN;
+    *nearzero= !sign;
+  }else
+    det= qh_determinant(qh, rows, dim, nearzero);
   trace2((qh, qh->ferr, 2002, "qh_detsimplex: det=%2.2g for point p%d, dim %d, nearzero? %d\n",
           det, qh_pointid(qh, apex), dim, *nearzero));
   return det;
@@ -497,6 +596,11 @@ realT qh_facetarea(qhT *qh, facetT *facet) {
   realT area= 0.0;
   ridgeT *ridge, **ridgep;
 
+  if (qh_robust2d(qh)) {
+    vertexT *a=(vertexT *)SETelem_(facet->vertices,0);
+    vertexT *b=(vertexT *)SETelem_(facet->vertices,1);
+    return hull_hypot(b->point[0]-a->point[0],b->point[1]-a->point[1]);
+  }
   if (facet->simplicial) {
     apex= SETfirstt_(facet->vertices, vertexT);
     area= qh_facetarea_simplex(qh, qh->hull_dim, apex->point, facet->vertices,
@@ -821,6 +925,7 @@ vertexT *qh_furthestvertex(qhT *qh, facetT *facetA, facetT *facetB, realT *maxdi
       update qh.totarea and qh.totvol
 */
 void qh_getarea(qhT *qh, facetT *facetlist) {
+  hull_sum area_sum={{0},{0},0,0};
   realT area;
   realT dist;
   facetT *facet;
@@ -847,8 +952,15 @@ void qh_getarea(qhT *qh, facetT *facetlist) {
         qh->totarea += area;
     }else {
       qh->totarea += area;
-      qh_distplane(qh, qh->interior_point, facet, &dist);
-      qh->totvol += -dist * area/ qh->hull_dim;
+      if (qh_robust2d(qh)) {
+        vertexT *a=(vertexT *)SETelem_(facet->vertices,0);
+        vertexT *b=(vertexT *)SETelem_(facet->vertices,1);
+        hull_product(&area_sum,a->point[0],b->point[1],!facet->toporient);
+        hull_product(&area_sum,a->point[1],b->point[0],facet->toporient);
+      }else {
+        qh_distplane(qh, qh->interior_point, facet, &dist);
+        qh->totvol += -dist * area/ qh->hull_dim;
+      }
     }
     if (qh->PRINTstatistics) {
       wadd_(Wareatot, area);
@@ -856,6 +968,8 @@ void qh_getarea(qhT *qh, facetT *facetlist) {
       wmin_(Wareamin, area);
     }
   }
+  if (qh_robust2d(qh))
+    qh->totvol=hull_sum_value(&area_sum,-1);
   qh->hasAreaVolume= True;
 } /* getarea */
 

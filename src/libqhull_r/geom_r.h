@@ -1,3 +1,6 @@
+/* Modified by Oleksandr Kulkov with AI assistance, 2026-10-31:
+   preserve near-collinear vertices in reentrant 2-d convex hulls.
+   Qhull license: COPYING.txt; original source: https://www.qhull.org/ */
 /*<html><pre>  -<a                             href="qh-geom_r.htm"
   >-------------------------------</a><a name="TOP">-</a>
 
@@ -103,6 +106,7 @@ extern "C" {
 #endif
 
 void    qh_backnormal(qhT *qh, realT **rows, int numrow, int numcol, boolT sign, coordT *normal, boolT *nearzero);
+void    qh_distplane2d(qhT *qh, pointT *point, facetT *facet, realT *dist);
 void    qh_distplane(qhT *qh, pointT *point, facetT *facet, realT *dist);
 facetT *qh_findbest(qhT *qh, pointT *point, facetT *startfacet,
                      boolT bestoutside, boolT isnewfacets, boolT noupper,

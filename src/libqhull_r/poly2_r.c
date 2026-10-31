@@ -1,3 +1,6 @@
+/* Modified by Oleksandr Kulkov with AI assistance, 2026-10-31:
+   preserve near-collinear vertices in reentrant 2-d convex hulls.
+   Qhull license: COPYING.txt; original source: https://www.qhull.org/ */
 /*<html><pre>  -<a                             href="qh-poly_r.htm"
   >-------------------------------</a><a name="TOP">-</a>
 
@@ -14,6 +17,7 @@
 */
 
 #include "qhull_ra.h"
+#include "robust2d_r.h"
 
 /*======== functions in alphabetical order ==========*/
 
@@ -2249,6 +2253,14 @@ void qh_initialhull(qhT *qh, setT *vertices) {
   qh_resetlists(qh, False, qh_RESETvisible);
   qh->facet_next= qh->facet_list;      /* advance facet when processed */
   qh->interior_point= qh_getcenter(qh, vertices);
+  if (qh_robust2d(qh)) {
+    int i;
+    for (i=0; i<3; ++i) {
+      vertexT *v=(vertexT *)SETelem_(vertices, i);
+      qh_robust2d_state(qh)->initial_vertices[2*i]=v->point[0];
+      qh_robust2d_state(qh)->initial_vertices[2*i+1]=v->point[1];
+    }
+  }
   if (qh->IStracing) {
     qh_fprintf(qh, qh->ferr, 8105, "qh_initialhull: ");
     qh_printpoint(qh, qh->ferr, "qh.interior_point", qh->interior_point);

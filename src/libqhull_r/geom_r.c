@@ -1,3 +1,6 @@
+/* Modified by Oleksandr Kulkov with AI assistance, 2026-10-31:
+   preserve near-collinear vertices in reentrant 2-d convex hulls.
+   Qhull license: COPYING.txt; original source: https://www.qhull.org/ */
 /*<html><pre>  -<a                             href="qh-geom_r.htm"
   >-------------------------------</a><a name="TOP">-</a>
 
@@ -14,6 +17,8 @@
 */
 
 #include "qhull_ra.h"
+#include "robust2d_r.h"
+#include "exact_sum.h"
 
 /*-<a                             href="qh-geom_r.htm#TOC"
   >-------------------------------</a><a name="distplane">-</a>
@@ -53,7 +58,23 @@ void qh_distplane(qhT *qh, pointT *point, facetT *facet, realT *dist) {
 
   switch (qh->hull_dim){
   case 2:
-    *dist= facet->offset + point[0] * normal[0] + point[1] * normal[1];
+    if (!qh_robust2d(qh)) {
+      *dist= facet->offset + point[0] * normal[0] + point[1] * normal[1];
+      break;
+    }
+    /* Rounded plane coefficients and evaluation contribute less than
+       128*DBL_EPSILON*M for |x|+|y| <= 2*M. The cached allowance
+       also covers underflow. Queries outside this range and
+       the unrounded interior-point construction use the determinant path. */
+    if (point != qh->interior_point) {
+      double approximate=facet->offset+point[0]*normal[0]+point[1]*normal[1];
+      if (fabs(approximate)>qh_robust2d_state(qh)->error &&
+          fabs(point[0])+fabs(point[1])<=2*qh_robust2d_state(qh)->maxcoord) {
+        *dist=approximate;
+        break;
+      }
+    }
+    qh_distplane2d(qh, point, facet, dist);
     break;
   case 3:
     *dist= facet->offset + point[0] * normal[0] + point[1] * normal[1] + point[2] * normal[2];
@@ -153,9 +174,27 @@ void qh_distplane(qhT *qh, pointT *point, facetT *facet, realT *dist) {
       if so, future calls go to qh_findbestnew()
     test horizon facets
 */
+/* Query eligibility is invariant while a facet search traverses its neighbors.
+   Keep the certified distance before every pruning or outside decision. */
+#define qh_queryfilter(qh, point) (qh_robust2d(qh) && !(qh)->RANDOMdist \
+    && (qh)->IStracing < 4 && !(qh)->TRACElevel \
+    && (point) != (qh)->interior_point \
+    && fabs((point)[0])+fabs((point)[1]) <= 2*qh_robust2d_state(qh)->maxcoord)
+#define qh_querydist(qh, point, facet, dist) do { \
+  if (queryfilter) { \
+    *(dist)=(facet)->offset+(point)[0]*(facet)->normal[0]+(point)[1]*(facet)->normal[1]; \
+    if (!(fabs(*(dist)) > queryerror)) \
+      qh_distplane2d(qh, point, facet, dist); \
+    zzinc_(Zdistplane); \
+  } else qh_distplane(qh, point, facet, dist); \
+} while (0)
+
 facetT *qh_findbest(qhT *qh, pointT *point, facetT *startfacet,
                      boolT bestoutside, boolT isnewfacets, boolT noupper,
                      realT *dist, boolT *isoutside, int *numpart) {
+  boolT queryfilter= qh_queryfilter(qh, point);
+  realT queryerror= queryfilter ? qh_robust2d_state(qh)->error : 0;
+
   realT bestdist= -REALmax/2 /* avoid underflow */;
   facetT *facet, *neighbor, **neighborp;
   facetT *bestfacet= NULL, *lastfacet= NULL;
@@ -180,7 +219,7 @@ facetT *qh_findbest(qhT *qh, pointT *point, facetT *startfacet,
     *isoutside= True;
   if (!startfacet->flipped) {  /* test startfacet before testing its neighbors */
     *numpart= 1;
-    qh_distplane(qh, point, startfacet, dist);  /* this code is duplicated below */
+    qh_querydist(qh, point, startfacet, dist);  /* this code is duplicated below */
     if (!bestoutside && *dist >= qh->MINoutside
     && (!startfacet->upperdelaunay || !noupper)) {
       bestfacet= startfacet;
@@ -206,7 +245,7 @@ facetT *qh_findbest(qhT *qh, pointT *point, facetT *startfacet,
       neighbor->visitid= visitid;
       if (!neighbor->flipped) {  /* code duplicated above */
         (*numpart)++;
-        qh_distplane(qh, point, neighbor, dist);
+        qh_querydist(qh, point, neighbor, dist);
         if (*dist > bestdist) {
           if (!bestoutside && *dist >= qh->MINoutside
           && (!neighbor->upperdelaunay || !noupper)) {
@@ -304,6 +343,9 @@ LABELreturn_best:
          update best facet
 */
 facetT *qh_findbesthorizon(qhT *qh, boolT ischeckmax, pointT* point, facetT *startfacet, boolT noupper, realT *bestdist, int *numpart) {
+  boolT queryfilter= qh_queryfilter(qh, point);
+  realT queryerror= queryfilter ? qh_robust2d_state(qh)->error : 0;
+
   facetT *bestfacet= startfacet;
   realT dist;
   facetT *neighbor, **neighborp, *facet;
@@ -323,6 +365,9 @@ facetT *qh_findbesthorizon(qhT *qh, boolT ischeckmax, pointT* point, facetT *sta
 #endif
   }
   searchdist= qh_SEARCHdist; /* an expression, a multiple of qh.max_outside and precision constants */
+  /* Search ordering needs a roundoff allowance even with exact visibility. */
+  if(qh_robust2d(qh))
+    maximize_(searchdist,4*qh_robust2d_state(qh)->error);
   minsearch= *bestdist - searchdist;
   if (ischeckmax) {
     /* Always check coplanar facets.  Needed for RBOX 1000 s Z1 G1e-13 t996564279 | QHULL Tv */
@@ -342,7 +387,7 @@ facetT *qh_findbesthorizon(qhT *qh, boolT ischeckmax, pointT* point, facetT *sta
         continue;
       neighbor->visitid= visitid;
       if (!neighbor->flipped) {  /* neighbors of flipped facets always searched via nextfacet */
-        qh_distplane(qh, point, neighbor, &dist); /* duplicate qh_distpane for new facets, they may be coplanar */
+        qh_querydist(qh, point, neighbor, &dist); /* duplicate qh_distpane for new facets, they may be coplanar */
         (*numpart)++;
         if (dist > *bestdist) {
           if (!neighbor->upperdelaunay || ischeckmax || (!noupper && dist >= qh->MINoutside)) {
@@ -445,6 +490,9 @@ facetT *qh_findbesthorizon(qhT *qh, boolT ischeckmax, pointT* point, facetT *sta
 */
 facetT *qh_findbestnew(qhT *qh, pointT *point, facetT *startfacet,
            realT *dist, boolT bestoutside, boolT *isoutside, int *numpart) {
+  boolT queryfilter= qh_queryfilter(qh, point);
+  realT queryerror= queryfilter ? qh_robust2d_state(qh)->error : 0;
+
   realT bestdist= -REALmax/2;
   facetT *bestfacet= NULL, *facet;
   int oldtrace= qh->IStracing, i;
@@ -490,7 +538,7 @@ facetT *qh_findbestnew(qhT *qh, pointT *point, facetT *startfacet,
         break;
       facet->visitid= visitid;
       if (!facet->flipped) {
-        qh_distplane(qh, point, facet, dist);
+        qh_querydist(qh, point, facet, dist);
         (*numpart)++;
         if (*dist > bestdist) {
           if (!facet->upperdelaunay || *dist >= qh->MINoutside) {
@@ -1156,7 +1204,32 @@ void qh_sethyperplane_det(qhT *qh, int dim, coordT **rows, coordT *point0,
   pointT *point;
 
 
-  if (dim == 2) {
+  if (dim == 2 && qh_robust2d(qh)) {
+    double dx, dy, length;
+    double maxcoord=hull_fmax(hull_fmax(fabs(rows[0][0]),fabs(rows[0][1])),
+                         hull_fmax(fabs(rows[1][0]),fabs(rows[1][1])));
+    if (maxcoord>qh_robust2d_state(qh)->maxcoord) {
+      qh_robust2d_state(qh)->maxcoord=maxcoord;
+      qh_robust2d_state(qh)->error=(maxcoord <= DBL_MAX/16 ?
+          128*DBL_EPSILON*maxcoord + 32*DBL_MIN : HUGE_VAL);
+    }
+    dx=rows[1][0]-rows[0][0];
+    dy=rows[1][1]-rows[0][1];
+    if (hull_fmax(fabs(dx),fabs(dy)) >= 1e-100 &&
+        hull_fmax(fabs(dx),fabs(dy)) <= 1e100) {
+      /* The original normal calculation is safe in this range. */
+      normal[0]=dy;
+      normal[1]=-dx;
+      qh_normalize2(qh,normal,dim,toporient,NULL,NULL);
+    }else {
+      hull_edge(rows[0],rows[1],&dx,&dy);
+      length=sqrt(dx*dx+dy*dy);
+      normal[0]=(toporient ? dy : -dy)/length;
+      normal[1]=(toporient ? -dx : dx)/length;
+    }
+    *offset= -(point0[0]*normal[0]+point0[1]*normal[1]);
+    *nearzero=False;
+  }else if (dim == 2) {
     normal[0]= dY(1,0);
     normal[1]= dX(0,1);
     qh_normalize2(qh, normal, dim, toporient, NULL, NULL);

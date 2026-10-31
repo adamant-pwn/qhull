@@ -1,3 +1,6 @@
+/* Modified by Oleksandr Kulkov with AI assistance, 2026-10-31:
+   preserve near-collinear vertices in reentrant 2-d convex hulls.
+   Qhull license: COPYING.txt; original source: https://www.qhull.org/ */
 
 /*<html><pre>  -<a                             href="qh-globa_r.htm"
   >-------------------------------</a><a name="TOP">-</a>
@@ -17,6 +20,7 @@
  */
 
 #include "qhull_ra.h"
+#include "robust2d_r.h"
 
 /*========= qh->definition -- globals defined in libqhull_r.h =======================*/
 
@@ -284,7 +288,7 @@ void qh_freebuffers(qhT *qh) {
   qh_memfree(qh, qh->upper_threshold, (qh->input_dim+1) * (int)sizeof(realT));
   qh_memfree(qh, qh->lower_bound, (qh->input_dim+1) * (int)sizeof(realT));
   qh_memfree(qh, qh->upper_bound, (qh->input_dim+1) * (int)sizeof(realT));
-  qh_memfree(qh, qh->gm_matrix, (qh->hull_dim+1) * qh->hull_dim * (int)sizeof(coordT));
+  qh_memfree(qh, qh->gm_matrix, qh_gm_bytes(qh));
   qh_memfree(qh, qh->gm_row, (qh->hull_dim+1) * (int)sizeof(coordT *));
   qh->NEARzero= qh->lower_threshold= qh->upper_threshold= NULL;
   qh->lower_bound= qh->upper_bound= NULL;
@@ -1555,7 +1559,9 @@ void qh_initqhull_buffers(qhT *qh) {
     qh->lower_bound[k]= -REALmax;
     qh->upper_bound[k]= REALmax;
   }
-  qh->gm_matrix= (coordT *)qh_memalloc(qh, (qh->hull_dim+1) * qh->hull_dim * (int)sizeof(coordT));
+  qh->gm_matrix= (coordT *)qh_memalloc(qh, qh_gm_bytes(qh));
+  if (qh->hull_dim == 2)
+    memset(qh_robust2d_state(qh), 0, sizeof(qhRobust2dT));
   qh->gm_row= (coordT **)qh_memalloc(qh, (qh->hull_dim+1) * (int)sizeof(coordT *));
 } /* initqhull_buffers */
 

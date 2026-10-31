@@ -1,3 +1,6 @@
+/* Modified by Oleksandr Kulkov with AI assistance, 2026-10-31:
+   preserve near-collinear vertices in reentrant 2-d convex hulls.
+   Qhull license: COPYING.txt; original source: https://www.qhull.org/ */
 /*<html><pre>  -<a                             href="qh-poly_r.htm"
   >-------------------------------</a><a name="TOP">-</a>
 
@@ -15,6 +18,7 @@
 */
 
 #include "qhull_ra.h"
+#include "robust2d_r.h"
 
 /*======== functions in alphabetical order ==========*/
 
@@ -248,6 +252,10 @@ boolT qh_checkflipped(qhT *qh, facetT *facet, realT *distp, boolT allerror) {
     trace0((qh, qh->ferr, 19, "qh_checkflipped: facet f%d flipped, allerror? %d, distance= %6.12g during p%d\n",
               facet->id, allerror, dist, qh->furthest_id));
     if (qh->num_facets > qh->hull_dim+1) { /* qh_initialhull reverses orientation if !qh_checkflipped */
+      if(qh_robust2d(qh)) {
+        qh_fprintf(qh,qh->ferr,9008,"ROBUST_RETRY flipped_facet\n");
+        qh_errexit(qh,qh_ERRprec,NULL,NULL);
+      }
       zzinc_(Zflippedfacets);
       qh_joggle_restart(qh, "flipped facet");
     }

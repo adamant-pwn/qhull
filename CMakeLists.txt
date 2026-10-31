@@ -1,3 +1,4 @@
+# Modified by Oleksandr Kulkov with AI assistance, 2026-10-31: build/test robust 2-d predicates.
 # CMakeLists.txt -- CMake configuration file for qhull, qhull6, and related programs
 #
 # CMake options
@@ -217,6 +218,8 @@ set(
 )
 set(
     libqhullr_SOURCES
+        src/libqhull_r/exact_sum.h
+        src/libqhull_r/robust2d_r.h
         src/libqhull_r/global_r.c
         src/libqhull_r/stat_r.c
         src/libqhull_r/geom2_r.c
@@ -673,6 +676,16 @@ endif()
 # ---------------------------------------
 if (${QHULL_ENABLE_TESTING} AND ${BUILD_APPLICATIONS})
     enable_testing()
+    add_executable(testrobust2d_r src/testrobust2d_r/testrobust2d_r.c)
+    if(BUILD_SHARED_LIBS)
+        target_link_libraries(testrobust2d_r PRIVATE ${qhull_SHAREDR})
+    else()
+        target_link_libraries(testrobust2d_r PRIVATE ${qhull_STATICR})
+    endif()
+    if(UNIX)
+        target_link_libraries(testrobust2d_r PRIVATE m)
+    endif()
+    add_test(NAME testrobust2d_r COMMAND testrobust2d_r)
     add_test(NAME testqset
        COMMAND ./testqset 10000)
     add_test(NAME testqset_r
